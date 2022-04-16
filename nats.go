@@ -1,4 +1,4 @@
-package commongo
+package microeshop
 
 type NatsMessageMetaData struct {
 	Headers map[string]any
