@@ -23,19 +23,19 @@ func NewNatsMessage[T any](data T) NatsMessage[T] {
 	}
 }
 
-type natsClient struct {
+type NatsClient struct {
 	connection *nats.Conn
 }
 
-func NewNatsClient(url string) (*natsClient, error) {
+func NewNatsClient(url string) (*NatsClient, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
 		return nil, err
 	}
-	return &natsClient{connection: nc}, nil
+	return &NatsClient{connection: nc}, nil
 }
 
-func (c natsClient) Close() {
+func (c NatsClient) Close() {
 	c.connection.Drain()
 	c.connection.Close()
 }
@@ -45,7 +45,7 @@ type MessagePublisher[T any] interface {
 }
 
 type messagePubliser[T any] struct {
-	client *natsClient
+	client *NatsClient
 }
 
 func (publisher messagePubliser[T]) Publish(msg NatsMessage[T]) error {
@@ -56,6 +56,6 @@ func (publisher messagePubliser[T]) Publish(msg NatsMessage[T]) error {
 	return publisher.client.connection.Publish(msg.MetaData.Topic, json)
 }
 
-func NewMessagePublisher[T any](client *natsClient) MessagePublisher[T] {
+func NewMessagePublisher[T any](client *NatsClient) MessagePublisher[T] {
 	return messagePubliser[T]{client: client}
 }
