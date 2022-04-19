@@ -1,13 +1,14 @@
 package microeshop
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/nats-io/nats.go"
 )
 
 type NatsMessageMetaData struct {
-	Headers map[string]any
+	Headers map[string]string
 	Topic   string
 }
 
@@ -41,19 +42,24 @@ func (c NatsClient) Close() {
 }
 
 type MessagePublisher[T any] interface {
-	Publish(msg NatsMessage[T]) error
+	Publish(context.Context, NatsMessage[T]) error
 }
 
 type messagePubliser[T any] struct {
 	client *NatsClient
 }
 
-func (publisher messagePubliser[T]) Publish(msg NatsMessage[T]) error {
+func (publisher messagePubliser[T]) Publish(ctx context.Context, msg NatsMessage[T]) error {
 	json, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-	return publisher.client.connection.Publish(msg.MetaData.Topic, json)
+	message := nats.NewMsg(msg.MetaData.Topic)
+	message.Data = json
+	for key, value := range msg.MetaData.Headers {
+		message.Header.Set(key, value)
+	}
+	return publisher.client.connection.PublishMsg(message)
 }
 
 func NewMessagePublisher[T any](client *NatsClient) MessagePublisher[T] {
