@@ -12,6 +12,14 @@ type NatsMessageMetaData struct {
 	Topic   string
 }
 
+func NewNatsMessageMetaData(topic string) NatsMessageMetaData {
+	headers := make(map[string]string)
+	return NatsMessageMetaData{
+		Topic:   topic,
+		Headers: headers,
+	}
+}
+
 type NatsMessage[T any] struct {
 	Data     T
 	MetaData NatsMessageMetaData
