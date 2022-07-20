@@ -5,18 +5,19 @@ import (
 	"encoding/json"
 
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type NatsMessageMetaData struct {
-	Headers map[string]string
-	Topic   string
+	Topic string
 }
 
 func NewNatsMessageMetaData(topic string) NatsMessageMetaData {
-	headers := make(map[string]string)
 	return NatsMessageMetaData{
-		Topic:   topic,
-		Headers: headers,
+		Topic: topic,
 	}
 }
 
@@ -54,7 +55,8 @@ type MessagePublisher[T any] interface {
 }
 
 type messagePubliser[T any] struct {
-	client *NatsClient
+	client        *NatsClient
+	traceProvider trace.TracerProvider
 }
 
 func (publisher messagePubliser[T]) Publish(ctx context.Context, msg NatsMessage[T]) error {
@@ -63,13 +65,71 @@ func (publisher messagePubliser[T]) Publish(ctx context.Context, msg NatsMessage
 		return err
 	}
 	message := nats.NewMsg(msg.MetaData.Topic)
+	span := publisher.startNatsSpam(ctx, msg.MetaData.Topic, message)
+	defer span.End()
 	message.Data = json
-	for key, value := range msg.MetaData.Headers {
-		message.Header.Set(key, value)
+	err = publisher.client.connection.PublishMsg(message)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
 	}
-	return publisher.client.connection.PublishMsg(message)
+	return nil
 }
 
-func NewMessagePublisher[T any](client *NatsClient) MessagePublisher[T] {
-	return messagePubliser[T]{client: client}
+func (client *messagePubliser[T]) startNatsSpam(ctx context.Context, topic string, msg *nats.Msg) trace.Span {
+	carrier := NewNatsCarrier(msg)
+	propagator := otel.GetTextMapPropagator()
+	ctx = propagator.Extract(ctx, carrier)
+	ctx, span := client.traceProvider.Tracer(defaultTracerName).Start(ctx, "publish")
+	span.SetAttributes(
+		attribute.KeyValue{Key: "messaging.rabbitmq.routing_key", Value: attribute.StringValue(topic)},
+		attribute.KeyValue{Key: "messaging.destination", Value: attribute.StringValue(topic)},
+		attribute.KeyValue{Key: "messaging.system", Value: attribute.StringValue("nats")},
+		attribute.KeyValue{Key: "messaging.destination_kind", Value: attribute.StringValue("topic")},
+		attribute.KeyValue{Key: "messaging.protocol", Value: attribute.StringValue("TCP")},
+		attribute.KeyValue{Key: "messaging.url", Value: attribute.StringValue(client.client.connection.ConnectedAddr())},
+	)
+	propagator.Inject(ctx, carrier)
+	return span
 }
+
+func NewMessagePublisher[T any](client *NatsClient, traceProvider trace.TracerProvider) MessagePublisher[T] {
+	return messagePubliser[T]{client: client, traceProvider: traceProvider}
+}
+
+type NatsCarrier struct {
+	msg *nats.Msg
+}
+
+// NewConsumerMessageCarrier creates a new ConsumerMessageCarrier.
+func NewNatsCarrier(msg *nats.Msg) NatsCarrier {
+	setHeaderIfEmpty(msg)
+	return NatsCarrier{msg: msg}
+}
+
+func setHeaderIfEmpty(msg *nats.Msg) {
+	if msg.Header == nil {
+		msg.Header = nats.Header{}
+	}
+}
+
+// Get retrieves a single value for a given key.
+func (c NatsCarrier) Get(key string) string {
+	return c.msg.Header.Get(key)
+}
+
+// Set sets a header.
+func (c NatsCarrier) Set(key, val string) {
+	c.msg.Header.Set(key, val)
+}
+
+func (c NatsCarrier) Keys() []string {
+	keys := make([]string, 0, len(c.msg.Header))
+	for k := range c.msg.Header {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+const defaultTracerName = "nats"
